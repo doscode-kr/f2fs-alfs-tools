@@ -16,11 +16,33 @@
 #include <sys/stat.h>
 #include <sys/mount.h>
 #include <time.h>
-//#include <linux/fs.h>
+#include <linux/fs.h>
 #include <uuid/uuid.h>
 
 #include "f2fs_fs.h"
 #include "f2fs_format_utils.h"
+
+/* chamdoo - 2013.09.18 */
+/*#define ENABLE_DBG_LOG*/
+#define ALFS_SNAPSHOT
+#define ALFS_META_LOGGING
+/*#define ALFS_LARGE_SEGMENT*/
+
+#ifdef ENABLE_DBG_LOG
+#define dbg_log(fmt, ...)	\
+		do {	\
+		printf(fmt, ##__VA_ARGS__);	\
+	} while (0);
+#else
+	#define dbg_log(fmt, ...)
+#endif
+
+#if defined(ALFS_SNAPSHOT) && defined(ALFS_META_LOGGING)
+#define NR_SUPERBLK_SECS	1	/* # of sections for the super block */
+#define NR_MAPPING_SECS		3 	/* # of sections for mapping entries */
+#define NR_METALOG_TIMES	2	/* # of sections for meta-log */
+#endif
+/* end */
 
 extern struct f2fs_configuration config;
 
@@ -137,6 +159,10 @@ static void f2fs_parse_options(int argc, char *argv[])
 
 int main(int argc, char *argv[])
 {
+#ifdef ALFS_SNAPSHOT
+	MSG(0, "\n\tModified for RISA (RC.1) (%s %s)\n\n", __TIME__, __DATE__);
+#endif
+
 	f2fs_init_configuration(&config);
 
 	f2fs_parse_options(argc, argv);
@@ -150,6 +176,41 @@ int main(int argc, char *argv[])
 
 	if (f2fs_get_device_info(&config) < 0)
 		return -1;
+
+
+	/* modified by chamdoo */
+	config.reserved_segments = (config.total_sectors / 4 * 0.05) / (2 * 1024);
+	MSG (0, "\t %d = %f KB / %d KB\n",
+		config.reserved_segments,
+		config.total_sectors / 4 * 0.05,
+		2 * 1024);
+	if (config.reserved_segments % config.segs_per_sec != 0) {
+		config.reserved_segments += config.segs_per_sec;
+		config.reserved_segments /= config.segs_per_sec;
+		config.reserved_segments *= config.segs_per_sec;
+	}
+	MSG (0, "\tINFO: overprovisioning = %d segs (%d MB)\n",
+		config.reserved_segments,
+		config.reserved_segments * 2);
+	/* end */
+#if defined(ALFS_SNAPSHOT) && defined(ALFS_META_LOGGING)
+	/* For RISA, two sectors are reserved for check points.
+	 * The metalog begins after two check points */
+	{
+		unsigned long long meta_log_starting_blk_ofs = 0, meta_log_byte_ofs = 0;
+		meta_log_starting_blk_ofs = 	(config.segs_per_sec * config.blks_per_seg) *
+							(NR_SUPERBLK_SECS + NR_MAPPING_SECS);
+		meta_log_byte_ofs = meta_log_starting_blk_ofs * F2FS_BLKSIZE;
+
+		// blkofs = (1*512)*(1+3) = 512*4
+		// blkofs = 2048
+		// byteofs = 2048 * 4096 = 8,388,608
+		alfs_init_meta_log_blk_ofs(meta_log_starting_blk_ofs);
+		DBG(1, "meta_log_starting_blk_ofs = %llu (blk)\n", meta_log_starting_blk_ofs);
+		DBG(1, "convert it to bytes, %llu (B)\n", meta_log_byte_ofs);
+	}
+
+#endif
 
 	if (f2fs_format_device() < 0)
 		return -1;
