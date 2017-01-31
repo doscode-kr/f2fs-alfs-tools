@@ -9,7 +9,19 @@
  * published by the Free Software Foundation.
  */
 #include "fsck.h"
+#include "alfs_ext.h"
 #include <locale.h>
+#define ALFSCODE
+#ifdef ALFSCODE
+#define NR_SUPERBLK_SECS	1	/* # of sections for the super block */		
+#define NR_MAPPING_SECS		3 	/* # of sections for mapping entries */		
+#define NR_METALOG_TIMES	2	/* # of sections for meta-log */
+#endif
+
+/*
+ * interface functions between original case and alfs case
+ */
+int alfs_dev_read_block(struct f2fs_sb_info* sbi, void* page, block_t blk_ofs);
 
 static u32 get_free_segments(struct f2fs_sb_info *sbi)
 {
@@ -134,12 +146,18 @@ static void DISP_label(u_int16_t *name)
 
 void print_raw_sb_info(struct f2fs_super_block *sb)
 {
-	if (!config.dbg_lv)
-		return;
+	//if (!config.dbg_lv)
+	//	return;
 
 	printf("\n");
 	printf("+--------------------------------------------------------+\n");
 	printf("| Super block                                            |\n");
+	printf("| size of f2fs_configuration = %5lu                      |\n", sizeof(struct f2fs_configuration));
+	printf("| size of f2fs_super_block   = %5lu                      |\n", sizeof(struct f2fs_super_block));
+	printf("| size of f2fs_checkpoint    = %5lu                      |\n", sizeof(struct f2fs_checkpoint));
+	printf("| size of f2fs_extent        = %5lu                      |\n", sizeof(struct f2fs_extent));
+	printf("| size of f2fs_inode         = %5lu                      |\n", sizeof(struct f2fs_inode));
+	printf("| size of f2fs_sb_info       = %5lu                      |\n", sizeof(struct f2fs_sb_info));
 	printf("+--------------------------------------------------------+\n");
 
 	DISP_u32(sb, magic);
@@ -186,8 +204,8 @@ void print_ckpt_info(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_checkpoint *cp = F2FS_CKPT(sbi);
 
-	if (!config.dbg_lv)
-		return;
+	//if (!config.dbg_lv)
+	//	return;
 
 	printf("\n");
 	printf("+--------------------------------------------------------+\n");
@@ -239,23 +257,24 @@ void print_ckpt_info(struct f2fs_sb_info *sbi)
 	printf("\n\n");
 }
 
+
 void print_cp_state(u32 flag)
 {
 	MSG(0, "Info: checkpoint state = %x : ", flag);
 	if (flag & CP_FSCK_FLAG)
-		MSG(0, "%s", " fsck");
+		MSG(0, "%s\n", " fsck");
 	if (flag & CP_ERROR_FLAG)
-		MSG(0, "%s", " error");
+		MSG(0, "%s\n", " error");
 	if (flag & CP_COMPACT_SUM_FLAG)
-		MSG(0, "%s", " compacted_summary");
+		MSG(0, "%s\n", " compacted_summary");
 	if (flag & CP_ORPHAN_PRESENT_FLAG)
-		MSG(0, "%s", " orphan_inodes");
+		MSG(0, "%s\n", " orphan_inodes");
 	if (flag & CP_FASTBOOT_FLAG)
-		MSG(0, "%s", " fastboot");
+		MSG(0, "%s\n", " fastboot");
 	if (flag & CP_UMOUNT_FLAG)
-		MSG(0, "%s", " unmount");
+		MSG(0, "%s\n", " unmount");
 	else
-		MSG(0, "%s", " sudden-power-off");
+		MSG(0, "%s\n", " sudden-power-off");
 	MSG(0, "\n");
 }
 
@@ -264,19 +283,19 @@ void print_sb_state(struct f2fs_super_block *sb)
 	__le32 f = sb->feature;
 	int i;
 
-	MSG(0, "Info: superblock features = %x : ", f);
+	MSG(0, "Info: superblock features = %x : \n", f);
 	if (f & cpu_to_le32(F2FS_FEATURE_ENCRYPT)) {
-		MSG(0, "%s", " encrypt");
+		MSG(0, "%s\n", " encrypt");
 	}
 	if (f & cpu_to_le32(F2FS_FEATURE_HMSMR)) {
-		MSG(0, "%s", " host-managed SMR");
+		MSG(0, "%s\n", " host-managed SMR");
 	}
-	MSG(0, "\n");
-	MSG(0, "Info: superblock encrypt level = %d, salt = ",
+	
+	MSG(0, "Info: superblock encrypt level = %d, salt = \n",
 					sb->encryption_level);
 	for (i = 0; i < 16; i++)
-		MSG(0, "%02x", sb->encrypt_pw_salt[i]);
-	MSG(0, "\n");
+		MSG(0, "%02x\n", sb->encrypt_pw_salt[i]);
+	
 }
 
 static inline int sanity_check_area_boundary(struct f2fs_super_block *sb,
@@ -299,6 +318,39 @@ static inline int sanity_check_area_boundary(struct f2fs_super_block *sb,
 				(segment_count_main << log_blocks_per_seg);
 	u64 seg_end_blkaddr = segment0_blkaddr +
 				(segment_count << log_blocks_per_seg);
+
+#if defined(ALFSCODE)
+	// 이 아래 두 개는 전역변수로 쓰임 ?
+	//u64 _meta_log_blkofs  = (get_sb(segs_per_sec) * (1 << log_blocks_per_seg)) * (NR_SUPERBLK_SECS + NR_MAPPING_SECS);
+	//u64 _meta_log_byteofs = _meta_log_blkofs * F2FS_BLKSIZE;
+
+	u64 total_meta_segments = segment_count_ckpt +
+							segment_count_sit +
+							segment_count_nat +
+							segment_count_ssa;
+
+	u32 nr_meta_logging_segments = total_meta_segments * (NR_METALOG_TIMES - 1);
+	u32 nr_meta_logging_blks = (nr_meta_logging_segments << log_blocks_per_seg);
+
+	DBG(0, "-------------------------------------------------\n");
+	DBG(0, "get_sb(segment0_blkaddr)(%u)\n", get_sb(segment0_blkaddr));
+	DBG(0, "get_sb(cp_blkaddr)(%u)\n", get_sb(cp_blkaddr));
+	DBG(0, "get_sb(sit_blkaddr)(%u)\n", get_sb(sit_blkaddr));
+	DBG(0, "get_sb(nat_blkaddr)(%u)\n", get_sb(nat_blkaddr));
+	DBG(0, "get_sb(ssa_blkaddr)(%u)\n", get_sb(ssa_blkaddr));
+	DBG(0, "get_sb(main_blkaddr)(%u)\n", get_sb(main_blkaddr));
+	DBG(0, "get_sb(segment_count_ckpt)(%u)\n", get_sb(segment_count_ckpt));
+	DBG(0, "get_sb(segment_count_sit)(%u)\n", get_sb(segment_count_sit));
+	DBG(0, "get_sb(segment_count_nat)(%u)\n", get_sb(segment_count_nat));
+	DBG(0, "get_sb(segment_count_ssa)(%u)\n", get_sb(segment_count_ssa));
+	DBG(0, "get_sb(segment_count_main)(%u)\n", get_sb(segment_count_main));
+	DBG(0, "get_sb(segment_count)(%u)\n", get_sb(segment_count));
+	DBG(0, "get_sb(log_blocks_per_seg)(%u)\n", get_sb(log_blocks_per_seg));
+	DBG(0, "nr_meta_logging_blks (%u)\n", nr_meta_logging_blks);
+	//DBG(0, "get_sb(main_end_blkaddr)(%llu)", get_sb(main_end_blkaddr));
+	//DBG(0, "get_sb(seg_end_blkaddr)(%llu)", get_sb(seg_end_blkaddr));
+	DBG(0, "-------------------------------------------------\n");
+#endif		
 
 	if (segment0_blkaddr != cp_blkaddr) {
 		MSG(0, "\tMismatch segment0(%u) cp_blkaddr(%u)\n",
@@ -330,11 +382,19 @@ static inline int sanity_check_area_boundary(struct f2fs_super_block *sb,
 		return -1;
 	}
 
-	if (ssa_blkaddr + (segment_count_ssa << log_blocks_per_seg) !=
-							main_blkaddr) {
+#ifdef ALFSCODE
+	MSG(0, "ALFSCODE IS DEFINED\n");
+	if ( (ssa_blkaddr + (segment_count_ssa << log_blocks_per_seg) + nr_meta_logging_blks) != main_blkaddr) {
+//	if ( (ssa_blkaddr + (segment_count_ssa << log_blocks_per_seg)) != main_blkaddr) {
+#else
+	if ( (ssa_blkaddr + (segment_count_ssa << log_blocks_per_seg)) != main_blkaddr) {
+#endif 
+
 		MSG(0, "\tWrong SSA boundary, start(%u) end(%u) blocks(%u)\n",
 			ssa_blkaddr, main_blkaddr,
 			segment_count_ssa << log_blocks_per_seg);
+
+
 		return -1;
 	}
 
@@ -366,42 +426,45 @@ int sanity_check_raw_super(struct f2fs_super_block *sb, u64 offset)
 {
 	unsigned int blocksize;
 
+	MSG(0, "Info: sanity_check_raw_super. offset (%lu)\n", offset);
+
 	if (F2FS_SUPER_MAGIC != get_sb(magic))
 		return -1;
 
 	if (F2FS_BLKSIZE != PAGE_CACHE_SIZE)
-		return -1;
+		return -2;
 
 	blocksize = 1 << get_sb(log_blocksize);
 	if (F2FS_BLKSIZE != blocksize)
-		return -1;
+		return -3;
 
 	/* check log blocks per segment */
 	if (get_sb(log_blocks_per_seg) != 9)
-		return -1;
+		return -4;
 
 	/* Currently, support 512/1024/2048/4096 bytes sector size */
 	if (get_sb(log_sectorsize) > F2FS_MAX_LOG_SECTOR_SIZE ||
 			get_sb(log_sectorsize) < F2FS_MIN_LOG_SECTOR_SIZE)
-		return -1;
+		return -5;
 
 	if (get_sb(log_sectors_per_block) + get_sb(log_sectorsize) !=
 						F2FS_MAX_LOG_SECTOR_SIZE)
-		return -1;
+		return -6;
 
 	/* check reserved ino info */
 	if (get_sb(node_ino) != 1 || get_sb(meta_ino) != 2 ||
 					get_sb(root_ino) != 3)
-		return -1;
+		return -7;
 
 	if (sanity_check_area_boundary(sb, offset))
-		return -1;
+		return -8;
 	return 0;
 }
 
 int validate_super_block(struct f2fs_sb_info *sbi, int block)
 {
 	u64 offset;
+	int err;
 
 	sbi->raw_super = malloc(sizeof(struct f2fs_super_block));
 
@@ -409,11 +472,15 @@ int validate_super_block(struct f2fs_sb_info *sbi, int block)
 		offset = F2FS_SUPER_OFFSET;
 	else
 		offset = F2FS_BLKSIZE + F2FS_SUPER_OFFSET;
-
+/*
+!!!!! 바이트 주소를 넣은 것이다. 
+ */
+	DBG(0, "READ SUPER BLOCK OFF = (%lu)\n", offset);
 	if (dev_read(sbi->raw_super, offset, sizeof(struct f2fs_super_block)))
 		return -1;
-
-	if (!sanity_check_raw_super(sbi->raw_super, offset)) {
+	err = sanity_check_raw_super(sbi->raw_super, offset);
+	if (!err) {
+		// Alright. 
 		/* get kernel version */
 		if (config.kd >= 0) {
 			dev_read_version(config.version, 0, VERSION_LEN);
@@ -449,7 +516,7 @@ int validate_super_block(struct f2fs_sb_info *sbi, int block)
 
 	free(sbi->raw_super);
 	sbi->raw_super = NULL;
-	MSG(0, "\tCan't find a valid F2FS superblock at 0x%x\n", block);
+	MSG(0, "\tCan't find a valid F2FS superblock at %x, %d\n", block, err);
 
 	return -EINVAL;
 }
@@ -467,8 +534,7 @@ int init_sb_info(struct f2fs_sb_info *sbi)
 	sbi->segs_per_sec = get_sb(segs_per_sec);
 	sbi->secs_per_zone = get_sb(secs_per_zone);
 	sbi->total_sections = get_sb(section_count);
-	sbi->total_node_count = (get_sb(segment_count_nat) / 2) *
-				sbi->blocks_per_seg * NAT_ENTRY_PER_BLOCK;
+	sbi->total_node_count = (get_sb(segment_count_nat) / 2) * sbi->blocks_per_seg * NAT_ENTRY_PER_BLOCK;
 	sbi->root_ino_num = get_sb(root_ino);
 	sbi->node_ino_num = get_sb(node_ino);
 	sbi->meta_ino_num = get_sb(meta_ino);
@@ -493,17 +559,21 @@ void *validate_checkpoint(struct f2fs_sb_info *sbi, block_t cp_addr,
 
 	/* Read the 1st cp block in this CP pack */
 	cp_page_1 = malloc(PAGE_SIZE);
-	if (dev_read_block(cp_page_1, cp_addr) < 0)
+	DBG(0, " - Read the 1st cp of pack #1 - %u\n", cp_addr);
+	if (alfs_dev_read_block(sbi, cp_page_1, cp_addr) < 0)
 		return NULL;
-
+	
 	cp = (struct f2fs_checkpoint *)cp_page_1;
+
 	crc_offset = get_cp(checksum_offset);
-	if (crc_offset >= blk_size)
+	if (crc_offset >= blk_size){
 		goto invalid_cp1;
+	}
 
 	crc = le32_to_cpu(*(__le32 *)((unsigned char *)cp + crc_offset));
-	if (f2fs_crc_valid(crc, cp, crc_offset))
+	if (f2fs_crc_valid(crc, cp, crc_offset)){
 		goto invalid_cp1;
+	}
 
 	pre_version = get_cp(checkpoint_ver);
 
@@ -511,11 +581,13 @@ void *validate_checkpoint(struct f2fs_sb_info *sbi, block_t cp_addr,
 	cp_page_2 = malloc(PAGE_SIZE);
 	cp_addr += get_cp(cp_pack_total_block_count) - 1;
 
-	if (dev_read_block(cp_page_2, cp_addr) < 0)
+	DBG(0, " - Read the 2nd cp of pack #1 - %u\n", cp_addr);
+	if (alfs_dev_read_block(sbi, cp_page_2, cp_addr) < 0)
 		goto invalid_cp2;
 
 	cp = (struct f2fs_checkpoint *)cp_page_2;
 	crc_offset = get_cp(checksum_offset);
+
 	if (crc_offset >= blk_size)
 		goto invalid_cp2;
 
@@ -533,8 +605,10 @@ void *validate_checkpoint(struct f2fs_sb_info *sbi, block_t cp_addr,
 
 invalid_cp2:
 	free(cp_page_2);
+	DBG(0, " - err cp2 -\n");
 invalid_cp1:
 	free(cp_page_1);
+	DBG(0, " - err cp1 -\n");
 	return NULL;
 }
 
@@ -556,10 +630,13 @@ int get_valid_checkpoint(struct f2fs_sb_info *sbi)
 	 * sets( cp pack1 and cp pack 2)
 	 */
 	cp_start_blk_no = get_sb(cp_blkaddr);
+	DBG(0, "try on 1st cp blk(%llu) \n", cp_start_blk_no);
 	cp1 = validate_checkpoint(sbi, cp_start_blk_no, &cp1_version);
 
 	/* The second checkpoint pack should start at the next segment */
 	cp_start_blk_no += 1 << get_sb(log_blocks_per_seg);
+
+	DBG(0, "try on 2nd cp blk(%llu) \n", cp_start_blk_no);
 	cp2 = validate_checkpoint(sbi, cp_start_blk_no, &cp2_version);
 
 	if (cp1 && cp2) {
@@ -589,7 +666,7 @@ int get_valid_checkpoint(struct f2fs_sb_info *sbi)
 
 	if (cp_blks > 1) {
 		unsigned int i;
-		unsigned long long cp_blk_no;
+		unsigned int cp_blk_no;
 
 		cp_blk_no = get_sb(cp_blkaddr);
 		if (cur_page == cp2)
@@ -598,7 +675,9 @@ int get_valid_checkpoint(struct f2fs_sb_info *sbi)
 		/* copy sit bitmap */
 		for (i = 1; i < cp_blks; i++) {
 			unsigned char *ckpt = (unsigned char *)sbi->ckpt;
-			ret = dev_read_block(cur_page, cp_blk_no + i);
+
+			DBG(0, " - copy sit bitmap - %u\n", cp_blk_no + i);
+			ret = alfs_dev_read_block(sbi, cur_page, cp_blk_no + i);
 			ASSERT(ret >= 0);
 			memcpy(ckpt + i * blk_size, cur_page, blk_size);
 		}
@@ -683,7 +762,8 @@ static int f2fs_init_nid_bitmap(struct f2fs_sb_info *sbi)
 			int ret;
 
 			start_blk = current_nat_addr(sbi, nid);
-			ret = dev_read_block((void *)&nat_block, start_blk);
+			DBG(0, " - Read the nid bitmap #%u - %u\n", nid, start_blk);
+			ret = alfs_dev_read_block(sbi, (void *)&nat_block, start_blk);
 			ASSERT(ret >= 0);
 		}
 
@@ -821,7 +901,8 @@ static void read_compacted_summaries(struct f2fs_sb_info *sbi)
 	start = start_sum_block(sbi);
 
 	kaddr = (char *)malloc(PAGE_SIZE);
-	ret = dev_read_block(kaddr, start++);
+	DBG(0, " - Read compacted summaries - %u\n", start);
+	ret = alfs_dev_read_block(sbi, kaddr, start++);
 	ASSERT(ret >= 0);
 
 	curseg = CURSEG_I(sbi, CURSEG_HOT_DATA);
@@ -852,7 +933,8 @@ static void read_compacted_summaries(struct f2fs_sb_info *sbi)
 					PAGE_CACHE_SIZE - SUM_FOOTER_SIZE)
 				continue;
 			memset(kaddr, 0, PAGE_SIZE);
-			ret = dev_read_block(kaddr, start++);
+			DBG(0, " - Read from hot datas to cold ones #%u - %u\n", j, start);
+			ret = alfs_dev_read_block(sbi, kaddr, start++);
 			ASSERT(ret >= 0);
 			offset = 0;
 		}
@@ -877,7 +959,8 @@ static void restore_node_summary(struct f2fs_sb_info *sbi,
 	sum_entry = &sum_blk->entries[0];
 
 	for (i = 0; i < sbi->blocks_per_seg; i++, sum_entry++) {
-		ret = dev_read_block(node_blk, addr);
+		DBG(0, " - Read node summary to restore - %u\n", addr);
+		ret = alfs_dev_read_block(sbi, node_blk, addr);
 		ASSERT(ret >= 0);
 		sum_entry->nid = node_blk->footer.nid;
 		addr++;
@@ -910,7 +993,8 @@ static void read_normal_summaries(struct f2fs_sb_info *sbi, int type)
 	}
 
 	sum_blk = (struct f2fs_summary_block *)malloc(PAGE_SIZE);
-	ret = dev_read_block(sum_blk, blk_addr);
+	DBG(0, " - Read normal summaries - %u\n", blk_addr);
+	ret = alfs_dev_read_block(sbi, sum_blk, blk_addr);
 	ASSERT(ret >= 0);
 
 	if (IS_NODESEG(type) && !is_set_ckpt_flags(cp, CP_UMOUNT_FLAG))
@@ -1018,8 +1102,9 @@ static struct f2fs_sit_block *get_current_sit_page(struct f2fs_sb_info *sbi,
 	/* calculate sit block address */
 	if (f2fs_test_bit(offset, sit_i->sit_bitmap))
 		blk_addr += sit_i->sit_blocks;
-
-	ret = dev_read_block(sit_blk, blk_addr);
+	
+	//DBG(0, " - get current sit page - %u\n", blk_addr);
+	ret = alfs_dev_read_block(sbi, sit_blk, blk_addr);
 	ASSERT(ret >= 0);
 
 	return sit_blk;
@@ -1135,7 +1220,8 @@ struct f2fs_summary_block *get_sum_block(struct f2fs_sb_info *sbi,
 	sum_blk = calloc(BLOCK_SZ, 1);
 	ASSERT(sum_blk);
 
-	ret = dev_read_block(sum_blk, ssa_blk);
+	DBG(0, " - Read ssa (sum) block - %lu\n", ssa_blk);
+	ret = alfs_dev_read_block(sbi, sum_blk, ssa_blk);
 	ASSERT(ret >= 0);
 
 	if (IS_SUM_NODE_SEG(sum_blk->footer))
@@ -1169,7 +1255,7 @@ static void get_nat_entry(struct f2fs_sb_info *sbi, nid_t nid,
 				struct f2fs_nat_entry *raw_nat)
 {
 	struct f2fs_nat_block *nat_block;
-	pgoff_t block_addr;
+	block_t block_addr;
 	int entry_off;
 	int ret;
 
@@ -1180,8 +1266,9 @@ static void get_nat_entry(struct f2fs_sb_info *sbi, nid_t nid,
 
 	entry_off = nid % NAT_ENTRY_PER_BLOCK;
 	block_addr = current_nat_addr(sbi, nid);
-
-	ret = dev_read_block(nat_block, block_addr);
+	
+	DBG(0, " - get_nat_entry- %u\n", block_addr);
+	ret = alfs_dev_read_block(sbi, nat_block, block_addr);
 	ASSERT(ret >= 0);
 
 	memcpy(raw_nat, &nat_block->entries[entry_off],
@@ -1203,7 +1290,8 @@ void update_data_blkaddr(struct f2fs_sb_info *sbi, nid_t nid,
 	get_node_info(sbi, nid, &ni);
 
 	/* read node_block */
-	ret = dev_read_block(node_blk, ni.blk_addr);
+	DBG(0, " - Read node_block - %u\n", ni.blk_addr);
+	ret = alfs_dev_read_block(sbi, node_blk, ni.blk_addr);
 	ASSERT(ret >= 0);
 
 	/* check its block address */
@@ -1223,7 +1311,8 @@ void update_data_blkaddr(struct f2fs_sb_info *sbi, nid_t nid,
 		get_node_info(sbi, le32_to_cpu(node_blk->footer.ino), &ni);
 
 		/* read inode block */
-		ret = dev_read_block(node_blk, ni.blk_addr);
+		DBG(0, " - Read inode block - %u\n", ni.blk_addr);
+		ret = alfs_dev_read_block(sbi, node_blk, ni.blk_addr);
 		ASSERT(ret >= 0);
 	}
 
@@ -1251,8 +1340,8 @@ void update_nat_blkaddr(struct f2fs_sb_info *sbi, nid_t ino,
 
 	entry_off = nid % NAT_ENTRY_PER_BLOCK;
 	block_addr = current_nat_addr(sbi, nid);
-
-	ret = dev_read_block(nat_block, block_addr);
+	DBG(0, " - update_nat_blkaddr - %lu\n", block_addr);
+	ret = alfs_dev_read_block(sbi, nat_block, block_addr);
 	ASSERT(ret >= 0);
 
 	if (ino)
@@ -1291,6 +1380,7 @@ void build_sit_entries(struct f2fs_sb_info *sbi)
 				goto got_it;
 			}
 		}
+		//DBG(0, "build_sit_entries segno(%u) of (%u)\n", segno, TOTAL_SEGS(sbi));
 		sit_blk = get_current_sit_page(sbi, segno);
 		sit = sit_blk->entries[SIT_ENTRY_OFFSET(sit_i, segno)];
 		free(sit_blk);
@@ -1398,7 +1488,7 @@ void rewrite_sit_area_bitmap(struct f2fs_sb_info *sbi)
 		u16 valid_blocks = 0;
 		u16 type;
 		int i;
-
+		DBG(0, "rewrite_sit_area_bitmap\n");
 		sit_blk = get_current_sit_page(sbi, segno);
 		sit = &sit_blk->entries[SIT_ENTRY_OFFSET(sit_i, segno)];
 		memcpy(sit->valid_map, ptr, SIT_VBLOCK_MAP_SIZE);
@@ -1448,6 +1538,7 @@ static void flush_sit_journal_entries(struct f2fs_sb_info *sbi)
 		segno = segno_in_journal(journal, i);
 		se = get_seg_entry(sbi, segno);
 
+		DBG(0, "flush_sit_journal_entries\n");
 		sit_blk = get_current_sit_page(sbi, segno);
 		sit = &sit_blk->entries[SIT_ENTRY_OFFSET(sit_i, segno)];
 
@@ -1485,7 +1576,8 @@ next:
 	entry_off = nid % NAT_ENTRY_PER_BLOCK;
 	block_addr = current_nat_addr(sbi, nid);
 
-	ret = dev_read_block(nat_block, block_addr);
+	DBG(0, " - flush_nat_journal_entries - %lu\n", block_addr);
+	ret = alfs_dev_read_block(sbi, nat_block, block_addr);
 	ASSERT(ret >= 0);
 
 	memcpy(&nat_block->entries[entry_off], &nat_in_journal(journal, i),
@@ -1610,7 +1702,8 @@ void move_curseg_info(struct f2fs_sb_info *sbi, u64 from)
 
 		/* update new segno */
 		ssa_blk = GET_SUM_BLKADDR(sbi, curseg->segno);
-		ret = dev_read_block(&buf, ssa_blk);
+		DBG(0, " - update new segno for ssa block - %lu\n", ssa_blk);
+		ret = alfs_dev_read_block(sbi, &buf, ssa_blk);
 		ASSERT(ret >= 0);
 
 		memcpy(curseg->sum_blk, &buf, SUM_ENTRIES_SIZE);
@@ -1694,7 +1787,8 @@ void nullify_nat_entry(struct f2fs_sb_info *sbi, u32 nid)
 	entry_off = nid % NAT_ENTRY_PER_BLOCK;
 	block_addr = current_nat_addr(sbi, nid);
 
-	ret = dev_read_block(nat_block, block_addr);
+	DBG(0, " - nullify_nat_entry- %lu\n", block_addr);
+	ret = alfs_dev_read_block(sbi, nat_block, block_addr);
 	ASSERT(ret >= 0);
 
 	memset(&nat_block->entries[entry_off], 0,
@@ -1800,7 +1894,8 @@ void build_nat_area_bitmap(struct f2fs_sb_info *sbi)
 		if (f2fs_test_bit(block_off, nm_i->nat_bitmap))
 			block_addr += sbi->blocks_per_seg;
 
-		ret = dev_read_block(nat_block, block_addr);
+		//DBG(0, " -build_nat_area_bitmap - %lu\n", block_addr);
+		ret = alfs_dev_read_block(sbi, nat_block, block_addr);
 		ASSERT(ret >= 0);
 
 		nid = block_off * NAT_ENTRY_PER_BLOCK;
@@ -1889,33 +1984,21 @@ void build_nat_area_bitmap(struct f2fs_sb_info *sbi)
 
 static int check_sector_size(struct f2fs_super_block *sb)
 {
-	int index;
 	u_int32_t log_sectorsize, log_sectors_per_block;
-	u_int8_t *zero_buff;
-
-	zero_buff = calloc(F2FS_BLKSIZE, 1);
 
 	log_sectorsize = log_base_2(config.sector_size);
 	log_sectors_per_block = log_base_2(config.sectors_per_blk);
 
-	if (log_sectorsize != get_sb(log_sectorsize))
-		set_sb(log_sectorsize, log_sectorsize);
-
-	if (log_sectors_per_block != get_sb(log_sectors_per_block))
-		set_sb(log_sectors_per_block, log_sectors_per_block);
-
-	memcpy(zero_buff + F2FS_SUPER_OFFSET, sb, sizeof(*sb));
-	DBG(1, "\tWriting super block, at offset 0x%08x\n", 0);
-	for (index = 0; index < 2; index++) {
-		if (dev_write(zero_buff, index * F2FS_BLKSIZE, F2FS_BLKSIZE)) {
-			MSG(1, "\tError: While while writing supe_blk "
-				"on disk!!! index : %d\n", index);
-			free(zero_buff);
-			return -1;
-		}
+	if (log_sectorsize != get_sb(log_sectorsize)){
+		DBG(0, "log_sectorsize is invalied \n");
+		return -1;
 	}
 
-	free(zero_buff);
+	if (log_sectors_per_block != get_sb(log_sectors_per_block)){
+		DBG(0, "log_sectors_per_block is invalied \n");
+		return -1;
+	}
+
 	return 0;
 }
 
@@ -1923,63 +2006,82 @@ int f2fs_do_mount(struct f2fs_sb_info *sbi)
 {
 	struct f2fs_checkpoint *cp = NULL;
 	int ret;
+	int block = 0;
 
-	sbi->active_logs = NR_CURSEG_TYPE;
-	ret = validate_super_block(sbi, 0);
-	if (ret) {
-		ret = validate_super_block(sbi, 1);
+	for (block = 0; block < 2; block++){
+		DBG(0, "f2fs_do_mount on (%d)th block. \n", block);
+		sbi->active_logs = NR_CURSEG_TYPE;
+		ret = validate_super_block(sbi, block);
+		
+
 		if (ret)
 			return -1;
-	}
+		
+		ret = check_sector_size(sbi->raw_super);
+		if (ret)
+			return -1;
 
-	ret = check_sector_size(sbi->raw_super);
-	if (ret)
-		return -1;
+		DBG(0, "print_raw_sb_info on (%d)th block. \n", block);
+		print_raw_sb_info(F2FS_RAW_SUPER(sbi));
 
-	print_raw_sb_info(F2FS_RAW_SUPER(sbi));
+		init_sb_info(sbi);
 
-	init_sb_info(sbi);
+		/// 여기에 뭔가 있어야 함. 
+#ifdef ALFSCODE
+		//spin_lock_init (&sbi->mapping_lock);
+		DBG(0, "F2FS (RC-1) for ALFS is initialized (%s %s)\n", __TIME__, __DATE__);
+		if (alfs_create_ai (sbi) != 0) {
+			DBG(0, "Failed to initialize alfs information");
+			return -1;
+		}
 
-	ret = get_valid_checkpoint(sbi);
-	if (ret) {
-		ERR_MSG("Can't find valid checkpoint\n");
-		return -1;
-	}
+		if (alfs_build_ai (sbi) != 0) {
+			DBG(0, "Failed to build alfs information");
+			return -1;
+		}
+#endif		
 
-	if (sanity_check_ckpt(sbi)) {
-		ERR_MSG("Checkpoint is polluted\n");
-		return -1;
-	}
-	cp = F2FS_CKPT(sbi);
+		ret = get_valid_checkpoint(sbi);
+		if (ret) {
+			ERR_MSG("Can't find valid checkpoint\n");
+			return -1;
+		}
 
-	print_ckpt_info(sbi);
+		if (sanity_check_ckpt(sbi)) {
+			ERR_MSG("Checkpoint is polluted\n");
+			return -1;
+		}
+		cp = F2FS_CKPT(sbi);
 
-	if (config.auto_fix || config.preen_mode) {
-		u32 flag = get_cp(ckpt_flags);
+		print_ckpt_info(sbi);
 
-		if (flag & CP_FSCK_FLAG)
-			config.fix_on = 1;
-		else if (!config.preen_mode)
-			return 1;
-	}
+		if (config.auto_fix || config.preen_mode) {
+			u32 flag = get_cp(ckpt_flags);
 
-	config.bug_on = 0;
+			if (flag & CP_FSCK_FLAG)
+				config.fix_on = 1;
+			else if (!config.preen_mode)
+				return 1;
+		}
 
-	sbi->total_valid_node_count = get_cp(valid_node_count);
-	sbi->total_valid_inode_count = get_cp(valid_inode_count);
-	sbi->user_block_count = get_cp(user_block_count);
-	sbi->total_valid_block_count = get_cp(valid_block_count);
-	sbi->last_valid_block_count = sbi->total_valid_block_count;
-	sbi->alloc_valid_block_count = 0;
+		config.bug_on = 0;
 
-	if (build_segment_manager(sbi)) {
-		ERR_MSG("build_segment_manager failed\n");
-		return -1;
-	}
+		sbi->total_valid_node_count = get_cp(valid_node_count);
+		sbi->total_valid_inode_count = get_cp(valid_inode_count);
+		sbi->user_block_count = get_cp(user_block_count);
+		sbi->total_valid_block_count = get_cp(valid_block_count);
+		sbi->last_valid_block_count = sbi->total_valid_block_count;
+		sbi->alloc_valid_block_count = 0;
 
-	if (build_node_manager(sbi)) {
-		ERR_MSG("build_segment_manager failed\n");
-		return -1;
+		if (build_segment_manager(sbi)) {
+			ERR_MSG("build_segment_manager failed\n");
+			return -1;
+		}
+
+		if (build_node_manager(sbi)) {
+			ERR_MSG("build_segment_manager failed\n");
+			return -1;
+		}
 	}
 
 	return 0;

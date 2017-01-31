@@ -10,7 +10,7 @@
  */
 #ifndef _F2FS_H_
 #define _F2FS_H_
-
+#define ALFSCODE
 #include <stdlib.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -200,6 +200,10 @@ struct f2fs_sb_info {
 
 	unsigned int cur_victim_sec;            /* current victim section num */
 	u32 free_segments;
+
+#ifdef ALFSCODE
+	struct alfs_info* ai;
+#endif
 };
 
 static inline struct f2fs_super_block *F2FS_RAW_SUPER(struct f2fs_sb_info *sbi)

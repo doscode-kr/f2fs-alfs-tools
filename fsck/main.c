@@ -17,7 +17,7 @@
  */
 #include "fsck.h"
 #include <libgen.h>
-
+//#define ALFSCODE
 struct f2fs_fsck gfsck;
 
 void fsck_usage()
@@ -469,7 +469,9 @@ int main(int argc, char **argv)
 {
 	struct f2fs_sb_info *sbi;
 	int ret = 0;
-
+#if defined(ALFSCODE)
+	MSG(0, "\n\tFile System check. Modified for ALFS (RC.1) (%s %s)\n\n", __TIME__, __DATE__);		
+#endif
 	f2fs_init_configuration(&config);
 
 	f2fs_parse_options(argc, argv);
@@ -489,6 +491,8 @@ int main(int argc, char **argv)
 	/* Get device */
 	if (f2fs_get_device_info(&config) < 0)
 		return -1;
+
+	// 이 위까지는 아무 내용 없음 
 fsck_again:
 	memset(&gfsck, 0, sizeof(gfsck));
 	gfsck.sbi.fsck = &gfsck;
